@@ -4,7 +4,7 @@ using System.Drawing;
 
 namespace Typhoon.NET
 {
-	public class FastPixel
+	public sealed class FastPixel
 	{
 		public byte[] rgbValues = new byte[4];
 

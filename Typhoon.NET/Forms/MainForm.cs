@@ -3,6 +3,8 @@ using System.Drawing;
 using System.Text;
 using System.IO;
 using System.Windows.Forms;
+using System.Drawing.Drawing2D;
+using Typhoon.Core.Drawing;
 
 namespace Typhoon.NET
 {
@@ -14,16 +16,14 @@ namespace Typhoon.NET
         private const int TileblockSize = 16;
         private const int TileblocksPerRow = 8;
 
-        bool Tiles4bpp = false;
-
         ushort BlockAmount = 0;
         int MapWidth, MapHeight;
         int PaletteRows, TilesAmount;
-        int CurrentTile = 0, CurrentTileblock = 0, TopTile = 0, BottomTile = 0;
+        int CurrentTileblock = 0, TopTile = 0, BottomTile = 0;
         int TilesPerRow = 1;
 
-        Bitmap CurrentTileImage, CurrentTileblockImage, TilesImage, TilesetImage, MapImage, TopImage, BottomImage;
-        Graphics CurrentTileGraphics, CurrentTileblockGraphics, TilesetGraphics, MapGraphics, TopGraphics, BottomGraphics;
+        Bitmap TilesImage, TilesetImage, MapImage, BottomImage;
+        Graphics TilesetGraphics, MapGraphics, BottomGraphics;
 
         string TilesPath, TilesetPath, PalettePath, TilemapPath;
 
@@ -32,29 +32,36 @@ namespace Typhoon.NET
         ushort[,] MapData;
         TileData[] TilesetData;
 
+        private readonly Surface tileTopLayerSurface;
+
+        private readonly Surface currentTileSurface;
+        private readonly Surface currentTileblockSurface;
+
+        private readonly EditorContext context;
+
         public MainForm()
         {
             InitializeComponent();
 
-            CurrentTileImage = new Bitmap(48, 48);
-            picCurrentTile.Image = CurrentTileImage;
-            CurrentTileGraphics = Graphics.FromImage(CurrentTileImage);
-            CurrentTileGraphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            context = new EditorContext
+            {
+                CurrentTile = 0,
+                FourBitsPerPixelTiles = false
+            };
 
-            CurrentTileblockImage = new Bitmap(48, 48);
-            picCurrentTileblock.Image = CurrentTileblockImage;
-            CurrentTileblockGraphics = Graphics.FromImage(CurrentTileblockImage);
-            CurrentTileblockGraphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            currentTileSurface = new Surface(48, 48, InterpolationMode.NearestNeighbor);
+            picCurrentTile.Image = currentTileSurface.GetBitmap();
+
+            currentTileblockSurface = new Surface(48, 48, InterpolationMode.NearestNeighbor);
+            picCurrentTileblock.Image = currentTileblockSurface.GetBitmap();
 
             BottomImage = new Bitmap(48, 48);
             picBottom.Image = BottomImage;
             BottomGraphics = Graphics.FromImage(BottomImage);
-            BottomGraphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            BottomGraphics.InterpolationMode = InterpolationMode.NearestNeighbor;
 
-            TopImage = new Bitmap(48, 48);
-            picTop.Image = TopImage;
-            TopGraphics = Graphics.FromImage(TopImage);
-            TopGraphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            tileTopLayerSurface = new Surface(48, 48, InterpolationMode.NearestNeighbor);
+            picTop.Image = tileTopLayerSurface.GetBitmap();
 
             Width = 662;
         }
@@ -66,25 +73,27 @@ namespace Typhoon.NET
 
         private void mnuOpenTiles_Click(object sender, EventArgs e)
         {
-            OpenFileDialog cdgOpen = new OpenFileDialog();
-            cdgOpen.Title = "Open Tiles...";
-            cdgOpen.Filter = "All Supported Files (*.bin;*.bmp;*.png;*.raw)|*.bin;*.bmp;*.png;*.raw|Binary Files (*.bin)|*.bin|Bitmap Files (*.bmp)|*.bmp|PNG Files (*.png)|*.png|RAW Files (*.raw)|*.raw";
-
-            if (cdgOpen.ShowDialog() == DialogResult.OK)
+            using (var openDialog = new OpenFileDialog
             {
-                TilesPath = cdgOpen.FileName;
+                Title = "Open Tiles...",
+                Filter = "All Supported Files (*.bin;*.bmp;*.png;*.raw)|*.bin;*.bmp;*.png;*.raw|Binary Files (*.bin)|*.bin|Bitmap Files (*.bmp)|*.bmp|PNG Files (*.png)|*.png|RAW Files (*.raw)|*.raw"
+            })
+            {
+                if (openDialog.ShowDialog() != DialogResult.OK) return;
+
+                TilesPath = openDialog.FileName;
                 if (Path.GetExtension(TilesPath) == ".bin" || Path.GetExtension(TilesPath) == ".raw")
                 {
-                    Tiles4bpp = true;
+                    context.FourBitsPerPixelTiles = true;
                     MessageBox.Show("This option allows you to load a binary or raw file with graphics data in 4bpp format but you would also need to provide palette data in GBA format. You can easily do this by using WinGrit.", Application.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Information);
 
-                    OpenFileDialog cdgOpenPalette = new OpenFileDialog();
+                    var cdgOpenPalette = new OpenFileDialog();
                     cdgOpenPalette.Title = "Open Palette...";
                     cdgOpenPalette.Filter = "All Supported Files (*.bin;*.raw)|*.bin;*.raw|Binary Files (*.bin)|*.bin|RAW Files (*.raw)|*.raw";
 
                     if (cdgOpenPalette.ShowDialog() != DialogResult.OK)
                     {
-                        cdgOpen.Dispose();
+                        openDialog.Dispose();
                         cdgOpenPalette.Dispose();
                         return;
                     }
@@ -101,7 +110,7 @@ namespace Typhoon.NET
                     picTiles.Image = TilesImage;
                 }
 
-                if (!mnuGameDevMode.Checked)
+                if (!GameDevModeMenuItem.Checked)
                     TilesPerRow = (TilesImage.Width / TileSize);
                 else
                     TilesPerRow = (TilesImage.Width / TileblockSize);
@@ -116,18 +125,16 @@ namespace Typhoon.NET
                 txtWidth.Enabled = true;
                 txtHeight.Enabled = true;
                 mnuNewTilemap.Enabled = true;
-                mnuGameDevMode.Enabled = true;
+                GameDevModeMenuItem.Enabled = true;
                 mnuOpenTilemap.Enabled = true;
-                cmbPaletteIndex.Enabled = true;
+                PaletteIndexCombo.Enabled = true;
 
-                txtWidth.Text = Convert.ToString(32);
-                txtHeight.Text = Convert.ToString(32);
+                txtWidth.Text = 32.ToString();
+                txtHeight.Text = 32.ToString();
 
                 DrawCurrentTile();
-                cmbPaletteIndex.SelectedIndex = 0;
+                PaletteIndexCombo.SelectedIndex = 0;
             }
-
-            cdgOpen.Dispose();
         }
 
         private void mnuOpenTilemap_Click(object sender, EventArgs e)
@@ -142,7 +149,7 @@ namespace Typhoon.NET
                 BinaryReader ReadROM = new BinaryReader(File.Open(TilemapPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
 
                 ReadROM.BaseStream.Position = 0;
-                if (!mnuGameDevMode.Checked)
+                if (!GameDevModeMenuItem.Checked)
                 {
                     MapWidth = Convert.ToInt32(txtWidth.Text);
                     MapHeight = Convert.ToInt32(txtHeight.Text);
@@ -182,10 +189,10 @@ namespace Typhoon.NET
         private void picTiles_Paint(object sender, PaintEventArgs e)
         {
             Pen Cursor = new Pen(Color.Blue, 2f);
-            if (mnuGameDevMode.Checked)
-                e.Graphics.DrawRectangle(Cursor, (CurrentTile % TilesPerRow) * TileblockSize, (CurrentTile / TilesPerRow) * TileblockSize, TileblockSize, TileblockSize);
+            if (GameDevModeMenuItem.Checked)
+                e.Graphics.DrawRectangle(Cursor, (context.CurrentTile % TilesPerRow) * TileblockSize, (context.CurrentTile / TilesPerRow) * TileblockSize, TileblockSize, TileblockSize);
             else
-                e.Graphics.DrawRectangle(Cursor, (CurrentTile % TilesPerRow) * TileSize, (CurrentTile / TilesPerRow) * TileSize, TileSize, TileSize);
+                e.Graphics.DrawRectangle(Cursor, (context.CurrentTile % TilesPerRow) * TileSize, (context.CurrentTile / TilesPerRow) * TileSize, TileSize, TileSize);
         }
 
         private void picTiles_MouseHandle(object sender, MouseEventArgs e)
@@ -196,26 +203,28 @@ namespace Typhoon.NET
             if (e.Button != System.Windows.Forms.MouseButtons.Left)
                 return;
 
-            if (!mnuGameDevMode.Checked)
-                CurrentTile = ((e.Y / TileSize) * TilesPerRow) + (e.X / TileSize);
+            if (!GameDevModeMenuItem.Checked)
+                context.CurrentTile = ((e.Y / TileSize) * TilesPerRow) + (e.X / TileSize);
             else
-                CurrentTile = ((e.Y / TileblockSize) * TilesPerRow) + (e.X / TileblockSize);
+                context.CurrentTile = ((e.Y / TileblockSize) * TilesPerRow) + (e.X / TileblockSize);
             DrawCurrentTile();
 
-            lblCurrentTile.Text = "Current Tile: 0x" + Convert.ToString(CurrentTile, HEX).ToUpper();
+            lblCurrentTile.Text = "Current Tile: 0x" + Convert.ToString(context.CurrentTile, HEX).ToUpper();
             picTiles.Invalidate();
         }
 
         private void DrawCurrentTile()
         {
-            Rectangle SrcRect;
-            Rectangle DestRect = new Rectangle(0, 0, 48, 48);
-            if (!mnuGameDevMode.Checked)
-                SrcRect = new Rectangle((CurrentTile % TilesPerRow) * TileSize, (CurrentTile / TilesPerRow) * TileSize, TileSize, TileSize);
-            else
-                SrcRect = new Rectangle((CurrentTile % TilesPerRow) * TileblockSize, (CurrentTile / TilesPerRow) * TileblockSize, TileblockSize, TileblockSize);
+            var tileSize = GameDevModeMenuItem.Checked ? TileblockSize : TileSize;
+            var x = (context.CurrentTile % TilesPerRow) * tileSize;
+            var y = (context.CurrentTile / TilesPerRow) * tileSize;            
 
-            CurrentTileGraphics.DrawImage(TilesImage, DestRect, SrcRect, GraphicsUnit.Pixel);
+            var dest = new Rectangle(0, 0, 48, 48);
+            var src = new Rectangle(x, y, tileSize, tileSize);
+
+            var surface = new Surface(TilesImage);
+            currentTileSurface.DrawImage(surface, src, dest);
+
             picCurrentTile.Invalidate();
         }
 
@@ -241,9 +250,9 @@ namespace Typhoon.NET
             PaletteRows = FileSize / 16; // 16 colors in a row (32 bytes)
 
             // Decode Palettes
-            //Palette = new Color[FileSize];
-            //for (int i = 0; i < FileSize; i++)
-            //    Palette[i] = GBAGraphics.DecodeGBAPalette(TilePalette[i]);
+            Palette = new Color[FileSize];
+            for (int i = 0; i < FileSize; i++)
+                Palette[i] = GBAGraphics.DecodeGBAPalette(TilePalette[i]);
 
             TilesGraphics.Clear(Palette[0]); // Background Color
 
@@ -253,8 +262,8 @@ namespace Typhoon.NET
             FastPixel fp = new FastPixel(Tiles);
             fp.rgbValues = new byte[Tiles.Width * Tiles.Height * 4];
             fp.Lock();
-            //for (int i = 0; i < TilesAmount; i++)
-            //    GBAGraphics.DrawTile(fp, i, TileSize, 32, TileGraphics, Palette);
+            for (int i = 0; i < TilesAmount; i++)
+                GBAGraphics.DrawTile(fp, i, TileSize, 32, TileGraphics, Palette);
 
             fp.Unlock(true);
 
@@ -264,45 +273,42 @@ namespace Typhoon.NET
             return Tiles;
         }
 
-        private void cmbPaletteIndex_SelectedIndexChanged(object sender, EventArgs e)
-        {
-            if (Tiles4bpp == true && cmbPaletteIndex.SelectedIndex >= PaletteRows)
-                return;
+        private void PaletteIndexCombo_SelectedIndexChanged(object sender, EventArgs e)
+        {         
+            if (!context.FourBitsPerPixelTiles) return;
+            if (PaletteIndexCombo.SelectedIndex >= PaletteRows) return;
 
-            if (Tiles4bpp)
-            {
-                Color[] PaletteBuffer = new Color[16];
-                Array.Copy(Palette, cmbPaletteIndex.SelectedIndex * 16, PaletteBuffer, 0, 16);
+            var paletteBuffer = new Color[16];
+            Array.Copy(Palette, PaletteIndexCombo.SelectedIndex * 16, paletteBuffer, 0, 16);
 
-                FastPixel fp = new FastPixel(TilesImage);
-                fp.rgbValues = new byte[TilesImage.Width * TilesImage.Height * 4];
+            var fp = new FastPixel(TilesImage);
+            fp.rgbValues = new byte[TilesImage.Width * TilesImage.Height * 4];
 
-                fp.Lock();
-                //for (int i = 0; i < TilesAmount; i++)
-                //    GBAGraphics.DrawTile(fp, i, TileSize, 32, TileGraphics, PaletteBuffer);
+            fp.Lock();
+            for (int i = 0; i < TilesAmount; i++)
+                GBAGraphics.DrawTile(fp, i, TileSize, 32, TileGraphics, paletteBuffer);
 
-                fp.Unlock(true);
-                picTiles.Invalidate();
-            }
+            fp.Unlock(true);
+            picTiles.Invalidate();
         }
 
-        private void mnuGameDevMode_Click(object sender, EventArgs e)
+        private void GameDevModeMenuItem_Click(object sender, EventArgs e)
         {
-            if (mnuGameDevMode.Checked)
+            if (GameDevModeMenuItem.Checked)
             {
-                this.Width = 662;
+                Width = 662;
                 cmdSaveTile.Enabled = false;
                 mnuOpenTileset.Enabled = false;
                 mnuSaveTileset.Enabled = false;
-                mnuGameDevMode.Checked = false;
+                GameDevModeMenuItem.Checked = false;
             }
             else
             {
-                this.Width = 830;
+                Width = 830;
                 cmdSaveTile.Enabled = true;
                 mnuOpenTileset.Enabled = true;
                 mnuSaveTileset.Enabled = true;
-                mnuGameDevMode.Checked = true;
+                GameDevModeMenuItem.Checked = true;
 
                 BlockAmount = 512;
                 TilesetData = new TileData[BlockAmount];
@@ -320,19 +326,19 @@ namespace Typhoon.NET
 
         private void chkHFlip_CheckedChanged(object sender, EventArgs e)
         {
-            Rectangle DestRect = new Rectangle(0, 0, 48, 48);
-            Rectangle SrcRect = new Rectangle(48, 0, -48, 48);
+            var dest = new Rectangle(0, 0, 48, 48);
+            var src = new Rectangle(48, 0, -48, 48);
 
-            CurrentTileGraphics.DrawImage(CurrentTileImage, DestRect, SrcRect, GraphicsUnit.Pixel);
+            currentTileSurface.DrawImage(currentTileSurface, src, dest);
             picCurrentTile.Invalidate();
         }
 
         private void chkVFlip_CheckedChanged(object sender, EventArgs e)
         {
-            Rectangle DestRect = new Rectangle(0, 0, 48, 48);
-            Rectangle SrcRect = new Rectangle(0, 48, 48, -48);
+            var dest = new Rectangle(0, 0, 48, 48);
+            var src = new Rectangle(0, 48, 48, -48);
 
-            CurrentTileGraphics.DrawImage(CurrentTileImage, DestRect, SrcRect, GraphicsUnit.Pixel);
+            currentTileSurface.DrawImage(currentTileSurface, src, dest);
             picCurrentTile.Invalidate();
         }
 
@@ -353,7 +359,7 @@ namespace Typhoon.NET
         private Bitmap RenderTilemap()
         {
             Bitmap Tilemap;
-            if (!mnuGameDevMode.Checked)
+            if (!GameDevModeMenuItem.Checked)
                 Tilemap = new Bitmap(MapWidth * TileSize, MapHeight * TileSize);
             else
                 Tilemap = new Bitmap(MapWidth * TileblockSize, MapHeight * TileblockSize);
@@ -362,7 +368,7 @@ namespace Typhoon.NET
             FastPixel mp = new FastPixel(Tilemap);
             mp.rgbValues = new byte[Tilemap.Width * Tilemap.Height * 4];
 
-            if (!mnuGameDevMode.Checked)
+            if (!GameDevModeMenuItem.Checked)
             {
                 tp = new FastPixel(TilesImage);
                 tp.rgbValues = new byte[TilesImage.Width * TilesImage.Height * 4];
@@ -379,7 +385,7 @@ namespace Typhoon.NET
             int SrcX, SrcY, DestX, DestY;
             for (int y = 0; y < MapHeight; y++)
             {
-                if (!mnuGameDevMode.Checked)
+                if (!GameDevModeMenuItem.Checked)
                     DestY = y * TileSize;
                 else
                     DestY = y * TileblockSize;
@@ -388,7 +394,7 @@ namespace Typhoon.NET
                 {
                     int Tile = MapData[x, y];
 
-                    if (!mnuGameDevMode.Checked)
+                    if (!GameDevModeMenuItem.Checked)
                     {
                         Tile = Tile & 0x3FF;
                         SrcX = (Tile % TilesPerRow) * TileSize;
@@ -400,12 +406,12 @@ namespace Typhoon.NET
                         SrcY = (Tile / 8) * TileblockSize;
                     }
 
-                    if (!mnuGameDevMode.Checked)
+                    if (!GameDevModeMenuItem.Checked)
                         DestX = x * TileSize;
                     else
                         DestX = x * TileblockSize;
 
-                    if (!mnuGameDevMode.Checked)
+                    if (!GameDevModeMenuItem.Checked)
                     {
                         for (int px = 0; px < TileSize; px++)
                             for (int py = 0; py < TileSize; py++)
@@ -428,7 +434,7 @@ namespace Typhoon.NET
 
         private void DrawTile(int x, int y, int TileNumber)
         {
-            if (!mnuGameDevMode.Checked)
+            if (!GameDevModeMenuItem.Checked)
             {
                 Rectangle SrcRect = new Rectangle((TileNumber % TilesPerRow) * TileSize, (TileNumber / TilesPerRow) * TileSize, TileSize, TileSize);
                 Rectangle DestRect = new Rectangle(x * TileSize, y * TileSize, TileSize, TileSize);
@@ -447,7 +453,7 @@ namespace Typhoon.NET
         private void picMap_MouseHandle(object sender, MouseEventArgs e)
         {
             int x, y;
-            if (!mnuGameDevMode.Checked)
+            if (!GameDevModeMenuItem.Checked)
             {
                 x = e.X / TileSize;
                 y = e.Y / TileSize;
@@ -465,7 +471,7 @@ namespace Typhoon.NET
             if (e.Button != System.Windows.Forms.MouseButtons.Left)
                 return;
 
-            if (mnuGameDevMode.Checked)
+            if (GameDevModeMenuItem.Checked)
             {
                 MapData[x, y] = (ushort)CurrentTileblock;
                 DrawTile(x, y, CurrentTileblock);
@@ -473,16 +479,19 @@ namespace Typhoon.NET
             }
             else
             {
-                MapData[x, y] = (ushort)(CurrentTile | (cmbPaletteIndex.SelectedIndex << 12));
-                DrawTile(x, y, CurrentTile);
+                MapData[x, y] = (ushort)(context.CurrentTile | (PaletteIndexCombo.SelectedIndex << 12));
+                DrawTile(x, y, context.CurrentTile);
             }
             picMap.Invalidate();
         }
 
         private void picTileset_Paint(object sender, PaintEventArgs e)
         {
-            Pen Cursor = new Pen(Color.Red, 2f);
-            e.Graphics.DrawRectangle(Cursor, (CurrentTileblock % TileblocksPerRow) * TileblockSize, (CurrentTileblock / TileblocksPerRow) * TileblockSize, TileblockSize, TileblockSize);
+            var cursor = new Pen(Color.Red, 2f);
+            var x = (CurrentTileblock % TileblocksPerRow) * TileblockSize;
+            var y = (CurrentTileblock / TileblocksPerRow) * TileblockSize;
+
+            e.Graphics.DrawRectangle(cursor, x, y, TileblockSize, TileblockSize);
         }
 
         private void picTileset_MouseHandle(object sender, MouseEventArgs e)
@@ -503,10 +512,16 @@ namespace Typhoon.NET
 
         private void DrawCurrentTileblock()
         {
-            Rectangle DestRect = new Rectangle(0, 0, 48, 48);
-            Rectangle SrcRect = new Rectangle((CurrentTileblock % TileblocksPerRow) * TileblockSize, (CurrentTileblock / TileblocksPerRow) * TileblockSize, TileblockSize, TileblockSize);
+            var x = (CurrentTileblock % TileblocksPerRow) * TileblockSize;
+            var y = (CurrentTileblock / TileblocksPerRow) * TileblockSize;
 
-            CurrentTileblockGraphics.DrawImage(TilesetImage, DestRect, SrcRect, GraphicsUnit.Pixel);
+            var dest = new Rectangle(0, 0, 48, 48);
+            var src = new Rectangle(x, y, TileblockSize, TileblockSize);
+
+            var surface = new Surface(TilesetImage);
+            currentTileblockSurface.DrawImage(surface, dest, src);
+
+            
             picCurrentTileblock.Invalidate();
         }
 
@@ -520,7 +535,9 @@ namespace Typhoon.NET
 
             // Draw Top
             SrcRect = new Rectangle((TilesetData[CurrentTileblock].TopTile % TilesPerRow) * TileblockSize, (TilesetData[CurrentTileblock].TopTile / TilesPerRow) * TileblockSize, TileblockSize, TileblockSize);
-            TopGraphics.DrawImage(TilesImage, DestRect, SrcRect, GraphicsUnit.Pixel);
+
+            var surface = new Surface(TilesImage);
+            tileTopLayerSurface.DrawImage(surface, SrcRect, DestRect);
 
             picTop.Invalidate();
             picBottom.Invalidate();
@@ -534,9 +551,9 @@ namespace Typhoon.NET
             if (e.Button != System.Windows.Forms.MouseButtons.Left)
                 return;
 
-            BottomTile = CurrentTile;
+            BottomTile = context.CurrentTile;
             Rectangle DestRect = new Rectangle(0, 0, 48, 48);
-            Rectangle SrcRect = new Rectangle((CurrentTile % TilesPerRow) * TileblockSize, (CurrentTile / TilesPerRow) * TileblockSize, TileblockSize, TileblockSize);
+            Rectangle SrcRect = new Rectangle((context.CurrentTile % TilesPerRow) * TileblockSize, (context.CurrentTile / TilesPerRow) * TileblockSize, TileblockSize, TileblockSize);
             BottomGraphics.DrawImage(TilesImage, DestRect, SrcRect, GraphicsUnit.Pixel);
 
             picBottom.Invalidate();
@@ -544,23 +561,25 @@ namespace Typhoon.NET
 
         private void picTop_MouseHandle(object sender, MouseEventArgs e)
         {
-            if (e.X < 0 || e.X >= TopImage.Width || e.Y < 0 || e.Y >= TopImage.Height)
+            if (e.X < 0 || e.X >= tileTopLayerSurface.Width || e.Y < 0 || e.Y >= tileTopLayerSurface.Height)
                 return;
 
-            if (e.Button != System.Windows.Forms.MouseButtons.Left)
+            if (e.Button != MouseButtons.Left)
                 return;
 
-            TopTile = CurrentTile;
-            Rectangle DestRect = new Rectangle(0, 0, 48, 48);
-            Rectangle SrcRect = new Rectangle((CurrentTile % TilesPerRow) * TileblockSize, (CurrentTile / TilesPerRow) * TileblockSize, TileblockSize, TileblockSize);
+            TopTile = context.CurrentTile;
+            var dest = new Rectangle(0, 0, 48, 48);
+            var src = new Rectangle((context.CurrentTile % TilesPerRow) * TileblockSize, (context.CurrentTile / TilesPerRow) * TileblockSize, TileblockSize, TileblockSize);
 
-            TopGraphics.DrawImage(TilesImage, DestRect, SrcRect, GraphicsUnit.Pixel);
+            var surface = new Surface(TilesImage);
+            tileTopLayerSurface.DrawImage(surface, dest, src);
+
             picTop.Invalidate();
         }
 
         private void cmdSaveTile_Click(object sender, EventArgs e)
         {
-            if (!mnuGameDevMode.Checked)
+            if (!GameDevModeMenuItem.Checked)
                 return;
 
             TilesetData[CurrentTileblock].TopTile = (ushort)TopTile;
@@ -637,7 +656,6 @@ namespace Typhoon.NET
 
 
             TilesetFile.Close();
-
         }
 
         private void mnuOpenTileset_Click(object sender, EventArgs e)
@@ -729,39 +747,43 @@ namespace Typhoon.NET
 
         private void mnuSaveTilemap_Click(object sender, EventArgs e)
         {
-            SaveFileDialog cdgSave = new SaveFileDialog();
-
-            cdgSave.Title = "Save Tilemap";
-            cdgSave.Filter = "Binary Files (*.bin)|*.bin|RAW Files (*.raw)|*.raw|Tilemap Files (*.tmp)|*.tmp|Typhoon Maps (*.tpm)|*.tpm";
-
-            if (cdgSave.ShowDialog() != DialogResult.OK)
-                return;
-
-            TilemapPath = cdgSave.FileName;
-            BinaryWriter TilemapFile = new BinaryWriter(File.Open(TilemapPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite));
-
-            MapWidth = Convert.ToInt32(txtWidth.Text);
-            MapHeight = Convert.ToInt32(txtHeight.Text);
-
-            TilemapFile.BaseStream.Position = 0;
-            if (!mnuGameDevMode.Checked)
+            using (var cdgSave = new SaveFileDialog
             {
-                for (int y = 0; y < MapHeight; y++)
-                    for (int x = 0; x < MapWidth; x++)
-                        TilemapFile.Write(MapData[x, y]);
-            }
-            else
+                Title = "Save Tilemap",
+                Filter = "Binary Files (*.bin)|*.bin|RAW Files (*.raw)|*.raw|Tilemap Files (*.tmp)|*.tmp|Typhoon Maps (*.tpm)|*.tpm"
+            })
             {
-                TilemapFile.Write(MapWidth);
-                TilemapFile.Write(MapHeight);
-                TilemapFile.Write(Path.GetFileName(TilesetPath));
-                TilemapFile.BaseStream.Position = 0x1D;
-                for (int y = 0; y < MapHeight; y++)
-                    for (int x = 0; x < MapWidth; x++)
-                        TilemapFile.Write(MapData[x, y]);
-            }
+                if (cdgSave.ShowDialog() != DialogResult.OK) return;
 
-            TilemapFile.Close();
+                TilemapPath = cdgSave.FileName;
+                using (var fs = File.Open(TilemapPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite))
+                {
+                    using (var writer = new BinaryWriter(fs))
+                    {
+                        writer.BaseStream.Position = 0;
+
+                        MapWidth = Convert.ToInt32(txtWidth.Text);
+                        MapHeight = Convert.ToInt32(txtHeight.Text);
+                        
+                        if (!GameDevModeMenuItem.Checked)
+                        {
+                            for (int y = 0; y < MapHeight; y++)
+                                for (int x = 0; x < MapWidth; x++)
+                                    writer.Write(MapData[x, y]);
+                        }
+                        else
+                        {
+                            writer.Write(MapWidth);
+                            writer.Write(MapHeight);
+                            writer.Write(Path.GetFileName(TilesetPath));
+                            writer.BaseStream.Position = 0x1D;
+                            for (int y = 0; y < MapHeight; y++)
+                                for (int x = 0; x < MapWidth; x++)
+                                    writer.Write(MapData[x, y]);
+                        }
+                    }
+                }
+            }
         }
 
     } // End of class
